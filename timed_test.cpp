@@ -54,9 +54,10 @@ void readNint(vlsv::ParallelReader &vlsv, int chunkSize, int chunkCount, uint64_
 int main(int argc,char* argv[]) {
    	bool success = true;
 
-	if (argc < 6)
+	if (argc < 7)
 	{
-		std::cout << "usage : srun timed_test buffer_size min_rank_chunk_size max_rank_chunk_size min_rank_chunk_count max_rank_chunk_count [WR mpiio_hint mpiio_value] [RD mpiio_hint mpiio_value]" << std::endl;
+		std::cout << "usage : srun timed_test R|W|RW buffer_size min_rank_chunk_size max_rank_chunk_size min_rank_chunk_count max_rank_chunk_count [WR mpiio_hint mpiio_value] [RD mpiio_hint mpiio_value]" << std::endl;
+		exit(42);
 	}
 
         // Init MPI:
@@ -66,17 +67,29 @@ int main(int argc,char* argv[]) {
 	
 	const double GiB = 1024*1024*1024;
 	
-	int bufferSize = std::atoi(argv[1]);
-        int minChunkSize = std::atoi(argv[2]);
-        int maxChunkSize = std::atoi(argv[3]);
-        int minChunkCount = std::atoi(argv[4]);
-        int maxChunkCount = std::atoi(argv[5]);
+	enum mode {R, W, WR};
+	enum mode rwmode;
+	if(argv[1] == std::string("R")) {
+		rwmode = R;
+	} else if (argv[1] == std::string("W")) {
+		rwmode = W;
+	} else if (argv[1] == std::string("WR") || argv[1] == std::string("RW")) {
+		rwmode = WR;
+	} else {
+		std::cout << "The first argument must be R, W, or RW to only read, only write, or read and write in the same pass." << std::endl;
+		exit(42);
+	}
+	int bufferSize = std::atoi(argv[2]);
+        int minChunkSize = std::atoi(argv[3]);
+        int maxChunkSize = std::atoi(argv[4]);
+        int minChunkCount = std::atoi(argv[5]);
+        int maxChunkCount = std::atoi(argv[6]);
 
 	MPI_Info MPIinfo_wr, MPIinfo_rd;
-	if (argc == 6) {
+	if (argc == 7) {
  		MPIinfo_wr = MPIinfo_rd = MPI_INFO_NULL;
 	} else {
-		int i=6, wr_count=0, rd_count=0;
+		int i=7, wr_count=0, rd_count=0;
 		MPI_Info_create(&MPIinfo_wr);
 		MPI_Info_create(&MPIinfo_rd);
 		MPI_Info * MPIinfo_ptr;
@@ -105,8 +118,22 @@ int main(int argc,char* argv[]) {
 		}
 	}
 	if(myRank == 0) {
-		std::cout << "INFO: This will write int data, int has size " << sizeof(int) << std::endl;
-		std::cout << "INFO: This will write between " << minChunkCount << " and " << maxChunkCount << " chunks of between " << minChunkSize*sizeof(int) / GiB << " and " << maxChunkSize*sizeof(int) / GiB << " GiB on each of the " << nRanks << " tasks." << std::endl;
+		std::string action;
+		switch(rwmode) {
+			case R:
+				action = std::string("only read");
+				break;
+			case W:
+				action = std::string("only write");
+				break;
+			case WR:
+				action = std::string("write, then read");
+				break;
+			default:
+				break;
+		}
+		std::cout << "INFO: This will " << action << " int data, int has size " << sizeof(int) << std::endl;
+		std::cout << "INFO: This will " << action << " between " << minChunkCount << " and " << maxChunkCount << " chunks of between " << minChunkSize*sizeof(int) / GiB << " and " << maxChunkSize*sizeof(int) / GiB << " GiB on each of the " << nRanks << " tasks." << std::endl;
 	}
 	
 	std::default_random_engine generatorChunkSizes(42), generatorChunkCounts(43);
@@ -115,108 +142,106 @@ int main(int argc,char* argv[]) {
 		chunkSizes.push_back(randomChunkSizes(generatorChunkSizes));
 		chunkCounts.push_back(randomChunkCounts(generatorChunkCounts));
 	}
-	
-	if(myRank == 0) {
-		std::stringstream stream;
-		stream << "# RD/WR \t Rank \t chunks \t size (GiB) \t total (GiB) \t time (s) \t speed (GiB/s)" << std::endl;
-		std::cerr << stream.str();
-	}
-	
-	
-	// WRITE
-	
-	// For writing, we need only one chunk that'll be written a number of times
-	intData.assign(chunkSizes[myRank], myRank);
-	
-	vlsv::Writer vlsvWriter;
-	vlsvWriter.setBuffer(bufferSize);
-	if (vlsvWriter.open("file.out",MPI_COMM_WORLD,0, MPIinfo_wr) == false) {
-		success = false;
-		MPI_Finalize();
-		return 1;
-	}
-	
+
 	const double chunkSize = chunkSizes[myRank]*sizeof(int) / GiB;
-	
-	MPI_Barrier(MPI_COMM_WORLD);
-	
-	double tStart = MPI_Wtime();
-	writeNint(vlsvWriter, chunkSizes[myRank], chunkCounts[myRank]);
-	double tTime = MPI_Wtime() - tStart;
-	
-	std::stringstream stream;
-   stream << "WR\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
-   std::cerr << stream.str();
-	
-	if (vlsvWriter.close() == false) {
-		success = false;
-	}
-	
-	// Do this here as the close call does the actual writing when buffering
-	MPI_Barrier(MPI_COMM_WORLD);
 	uint64_t totalChunkCount = 0;
 	double totalSize = 0;
+
 	if(myRank == 0) {
-		const double totalTime = MPI_Wtime() - tStart;
 		for (int i=0; i<nRanks; i++) {
 			totalChunkCount += chunkCounts[i];
 			totalSize += chunkCounts[i]*chunkSizes[i];
 		}
 		totalSize *= sizeof(int) / GiB;
+		
 		std::stringstream stream;
-		stream << "WR\t" << nRanks << "\t" << totalChunkCount << "\t" << totalSize / totalChunkCount << "\t" << totalSize << "\t" << totalTime << "\t" << totalSize / totalTime << std::endl;
+		stream << "# RD/WR \t Rank \t chunks \t size (GiB) \t total (GiB) \t time (s) \t speed (GiB/s)" << std::endl;
 		std::cerr << stream.str();
 	}
 	
+	std::stringstream stream;
+	
+	// WRITE
+	if(rwmode != R) {
+		// For writing, we need only one chunk that'll be written a number of times
+		intData.assign(chunkSizes[myRank], myRank);
+		
+		vlsv::Writer vlsvWriter;
+		vlsvWriter.setBuffer(bufferSize);
+		if (vlsvWriter.open("file.out",MPI_COMM_WORLD,0, MPIinfo_wr) == false) {
+			success = false;
+			MPI_Finalize();
+			return 1;
+		}
+		
+		
+		MPI_Barrier(MPI_COMM_WORLD);
+		
+		double tStart = MPI_Wtime();
+		writeNint(vlsvWriter, chunkSizes[myRank], chunkCounts[myRank]);
+		double tTime = MPI_Wtime() - tStart;
+		
+		stream << "WR\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
+		std::cerr << stream.str();
+		
+		if (vlsvWriter.close() == false) {
+			success = false;
+		}
+		
+		// Do this here as the close call does the actual writing when buffering
+		MPI_Barrier(MPI_COMM_WORLD);
+		if(myRank == 0) {
+			const double totalTime = MPI_Wtime() - tStart;
+			std::stringstream stream;
+			stream << "WR\t" << nRanks << "\t" << totalChunkCount << "\t" << totalSize / totalChunkCount << "\t" << totalSize << "\t" << totalTime << "\t" << totalSize / totalTime << std::endl;
+			std::cerr << stream.str();
+		}
+	}
 	
 	// READ
-	
-	// For reading we want the buffer to have the full size
-	intData.resize(chunkSizes[myRank]*chunkCounts[myRank]);
-	
-	vlsv::ParallelReader vlsvReader;
-	if (vlsvReader.open("file.out",MPI_COMM_WORLD,0, MPIinfo_rd) == false) {
-		success = false;
-		MPI_Finalize();
-		return 1;
-	}
-	
-	uint64_t myFileOffset = 0;
-	for(int t=0; t<myRank; t++) {
-		myFileOffset += chunkSizes[t]*chunkCounts[t];
-	}
-	
-	MPI_Barrier(MPI_COMM_WORLD);
-	
-	tStart = MPI_Wtime();
-	readNint(vlsvReader, chunkSizes[myRank], chunkCounts[myRank], myFileOffset);
-	tTime = MPI_Wtime() - tStart;
-	
-	stream.clear();
-	stream.str(std::string());
-   stream << "RD\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
-   std::cerr << stream.str();
-	
-	if (vlsvReader.close() == false) {
-		success = false;
-	}
-	stream.clear();
-   stream.str(std::string());
-	for (auto i : intData) {
-		stream << myRank << " " << intData.size() << " " << intData[i] << std::endl;
-		std::cerr << stream.str();
+	if(rwmode != W) {
+		// For reading we want the buffer to have the full size
+		intData.resize(chunkSizes[myRank]*chunkCounts[myRank]);
+		
+		vlsv::ParallelReader vlsvReader;
+		if (vlsvReader.open("file.out",MPI_COMM_WORLD,0, MPIinfo_rd) == false) {
+			success = false;
+			MPI_Finalize();
+			return 1;
+		}
+		
+		uint64_t myFileOffset = 0;
+		for(int t=0; t<myRank; t++) {
+			myFileOffset += chunkSizes[t]*chunkCounts[t];
+		}
+		
+		MPI_Barrier(MPI_COMM_WORLD);
+		
+		double tStart = MPI_Wtime();
+		readNint(vlsvReader, chunkSizes[myRank], chunkCounts[myRank], myFileOffset);
+		double tTime = MPI_Wtime() - tStart;
+		
 		stream.clear();
 		stream.str(std::string());
-	}
-	
-	MPI_Barrier(MPI_COMM_WORLD);
-	if(myRank == 0) {
-		const double totalTime = MPI_Wtime() - tStart;
-		std::stringstream stream;
-		stream << "RD\t" << nRanks << "\t" << totalChunkCount << "\t" << totalSize / totalChunkCount << "\t" << totalSize << "\t" << totalTime << "\t" << totalSize / totalTime << std::endl;
+		stream << "RD\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
+		std::cerr << stream.str();
+		
+		if (vlsvReader.close() == false) {
+			success = false;
+		}
+		
+		MPI_Barrier(MPI_COMM_WORLD);
+		if(myRank == 0) {
+			const double totalTime = MPI_Wtime() - tStart;
+			std::stringstream stream;
+			stream << "RD\t" << nRanks << "\t" << totalChunkCount << "\t" << totalSize / totalChunkCount << "\t" << totalSize << "\t" << totalTime << "\t" << totalSize / totalTime << std::endl;
+			std::cerr << stream.str();
+		}
+		stream.clear();
+		stream << myRank << " " << intData[chunkSizes[myRank]*chunkCounts[myRank] - 2] << std::endl;
 		std::cerr << stream.str();
 	}
-	
+
 	MPI_Finalize();
  	if (success == false) return 1;
 	return 0;
