@@ -207,11 +207,6 @@ int main(int argc,char* argv[]) {
 		// For reading we want the buffer to have the full size
 		intData_r.resize(chunkSizes[myRank]*chunkCounts[myRank]);
 
-		stream << myRank << " " << chunkSizes[myRank] << " " << chunkCounts[myRank] << " " << intData_r.size() << std::endl;
-		std::cerr << stream.str();
-		stream.clear();
-		stream.str(std::string());
-		
 		vlsv::ParallelReader vlsvReader;
 		if (vlsvReader.open("file.out",MPI_COMM_WORLD,0, MPIinfo_rd) == false) {
 			success = false;
@@ -230,12 +225,6 @@ int main(int argc,char* argv[]) {
 		readNint(vlsvReader, chunkSizes[myRank], chunkCounts[myRank], myFileOffset);
 		double tTime = MPI_Wtime() - tStart;
 		
-		stream << myRank << " offset " << myFileOffset << std::endl;
-		std::cerr << stream.str();
-		stream.clear();
-		stream.str(std::string());
-
-		stream.str(std::string());
 		stream << "RD\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
 		std::cerr << stream.str();
 		stream.clear();
@@ -245,10 +234,6 @@ int main(int argc,char* argv[]) {
 			success = false;
 		}
 
-//	        for (uint i=0; i<intData_r.size(); i++) {
-//			intData_r[i]++;
-//		}
-		
 		MPI_Barrier(MPI_COMM_WORLD);
 		if(myRank == 0) {
 			const double totalTime = MPI_Wtime() - tStart;
@@ -257,16 +242,6 @@ int main(int argc,char* argv[]) {
 			stream.clear();
 			stream.str(std::string());
 		}
-		stream << myRank << " " << intData_r[chunkSizes[myRank]*(chunkCounts[myRank] - 1)] << std::endl;
-		std::cerr << stream.str();
-		stream.clear();
-		stream.str(std::string());
-	        for (uint i=0; i<intData_w.size(); i++) {
-	                stream << myRank << " " << intData_r.size() << " " << intData_w[i] << " " << intData_r[i] << std::endl;
-	                std::cerr << stream.str();
-	                stream.clear();
-			stream.str(std::string());
-	        }
 	}
 
 	MPI_Finalize();
