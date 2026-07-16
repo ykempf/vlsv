@@ -145,8 +145,8 @@ int main(int argc,char* argv[]) {
 	double tTime = MPI_Wtime() - tStart;
 	
 	std::stringstream stream;
-        stream << "WR\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
-        std::cerr << stream.str();
+   stream << "WR\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
+   std::cerr << stream.str();
 	
 	if (vlsvWriter.close() == false) {
 		success = false;
@@ -183,7 +183,7 @@ int main(int argc,char* argv[]) {
 	
 	uint64_t myFileOffset = 0;
 	for(int t=0; t<myRank; t++) {
-		myFileOffset += chunkSizes[t]*chunkCounts[t]*sizeof(int);
+		myFileOffset += chunkSizes[t]*chunkCounts[t];
 	}
 	
 	MPI_Barrier(MPI_COMM_WORLD);
@@ -194,14 +194,14 @@ int main(int argc,char* argv[]) {
 	
 	stream.clear();
 	stream.str(std::string());
-        stream << "RD\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
-        std::cerr << stream.str();
+   stream << "RD\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
+   std::cerr << stream.str();
 	
 	if (vlsvReader.close() == false) {
 		success = false;
 	}
 	stream.clear();
-        stream.str(std::string());
+   stream.str(std::string());
 	for (auto i : intData) {
 		stream << myRank << " " << intData.size() << " " << intData[i] << std::endl;
 		std::cerr << stream.str();
