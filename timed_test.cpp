@@ -45,7 +45,7 @@ void readNint(vlsv::ParallelReader &vlsv, int chunkSize, int chunkCount, uint64_
 	vlsv.startMultiread("arrayName", xmlAttributes);
 	for (int i = 0; i < chunkCount; i++)
 	{
-		vlsv.addMultireadUnit((char*)intData_r.data() + chunkSize*i, chunkSize);
+		vlsv.addMultireadUnit((char*)(intData_r.data() + chunkSize*i), chunkSize);
 	}
 	vlsv.endMultiread(fileOffset);
 }
