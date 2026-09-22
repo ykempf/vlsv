@@ -9,6 +9,7 @@
 #include <limits>
 #include <numeric>
 #include <random>
+#include <omp.h>
 
 #include "vlsv_writer.h"
 #include "vlsv_reader_parallel.h"
@@ -50,13 +51,30 @@ void readNint(vlsv::ParallelReader &vlsv, int chunkSize, int chunkCount, uint64_
 	vlsv.endMultiread(fileOffset);
 }
 
+// Every element of intData_r should equal myRank, since writeNint() fills
+// intData_w with myRank before writing it out.
+bool checkNint(int myRank)
+{
+	size_t errorCount = 0;
+	const size_t n = intData_r.size();
+	#pragma omp parallel for reduction(+:errorCount)
+	for (size_t i = 0; i < n; i++) {
+		errorCount += (intData_r[i] != myRank);
+	}
+	if (errorCount > 0) {
+		std::cerr << "ERROR: Rank " << myRank << " read " << errorCount << "/" << intData_r.size()
+			<< " incorrect values (expected all == " << myRank << ")" << std::endl;
+	}
+	return errorCount == 0;
+}
+
 
 int main(int argc,char* argv[]) {
    	bool success = true;
 
 	if (argc < 7)
 	{
-		std::cout << "usage : srun timed_test R|W|RW buffer_size min_rank_chunk_size max_rank_chunk_size min_rank_chunk_count max_rank_chunk_count [WR mpiio_hint mpiio_value] [RD mpiio_hint mpiio_value]" << std::endl;
+		std::cout << "usage : srun timed_test R|W|RW buffer_size min_rank_chunk_size max_rank_chunk_size min_rank_chunk_count max_rank_chunk_count [WR mpiio_hint mpiio_value] [RD mpiio_hint mpiio_value] [CHECK]" << std::endl;
 		exit(42);
 	}
 
@@ -64,6 +82,15 @@ int main(int argc,char* argv[]) {
    	MPI_Init(&argc,&argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
 	MPI_Comm_size(MPI_COMM_WORLD, &nRanks);
+
+	// If present, CHECK must be the last argument; it enables a correctness
+	// check of the data read back in (reduces argc so the rest of the
+	// positional/MPI-hint parsing below is unaffected).
+	bool checkData = false;
+	if (argv[argc-1] == std::string("CHECK")) {
+		checkData = true;
+		argc--;
+	}
 	
 	const double GiB = 1024*1024*1024;
 	
@@ -224,11 +251,24 @@ int main(int argc,char* argv[]) {
 		double tStart = MPI_Wtime();
 		readNint(vlsvReader, chunkSizes[myRank], chunkCounts[myRank], myFileOffset);
 		double tTime = MPI_Wtime() - tStart;
-		
+
 		stream << "RD\t" << myRank << "\t" << chunkCounts[myRank] << "\t" << chunkSize << "\t" << chunkCounts[myRank]*chunkSize << "\t" << tTime << "\t" << chunkCounts[myRank]*chunkSize / tTime << std::endl;
 		std::cerr << stream.str();
 		stream.clear();
 		stream.str(std::string());
+
+		if (checkData) {
+			bool localOk = checkNint(myRank);
+			int localOkInt = localOk ? 1 : 0;
+			int globalOkInt = 0;
+			MPI_Reduce(&localOkInt, &globalOkInt, 1, MPI_INT, MPI_MIN, 0, MPI_COMM_WORLD);
+			if (!localOk) {
+				success = false;
+			}
+			if (myRank == 0) {
+				std::cout << "INFO: Data correctness check " << (globalOkInt ? "PASSED" : "FAILED") << std::endl;
+			}
+		}
 
 		if (vlsvReader.close() == false) {
 			success = false;
